@@ -145,14 +145,36 @@ function WalletPayTab({
         [wallets]
     )
 
+    // First select after mount can hit WalletNotSelectedError because the adapter
+    // is not registered yet, so retry once. Any other error propagates.
     useEffect(() => {
-        if (wallet && !connected && connecting) {
-            connect()
-                .then(() => setConnecting(false))
-                .catch((err: any) => {
-                    setError(err.message ?? 'Failed to connect')
-                    setConnecting(false)
-                })
+        if (!(wallet && !connected && connecting)) return
+        let cancelled = false
+        let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+        const tryConnect = async (retried: boolean): Promise<void> => {
+            try {
+                await connect()
+                if (!cancelled) setConnecting(false)
+            } catch (err: any) {
+                if (cancelled) return
+                if (!retried && err?.name === 'WalletNotSelectedError') {
+                    retryTimer = setTimeout(() => {
+                        retryTimer = null
+                        void tryConnect(true)
+                    }, 200)
+                    return
+                }
+                setError(err?.message ?? 'Failed to connect')
+                setConnecting(false)
+            }
+        }
+
+        void tryConnect(false)
+
+        return () => {
+            cancelled = true
+            if (retryTimer !== null) clearTimeout(retryTimer)
         }
     }, [wallet, connected, connecting])
 
