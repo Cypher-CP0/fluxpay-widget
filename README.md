@@ -8,27 +8,19 @@ Built for [Colosseum Hackathon 2026](https://colosseum.org).
 
 ## Demo
 
-{Soon}
+
+
+https://github.com/user-attachments/assets/fb6b8181-5bc4-400e-9692-95fa102433a8
+
+
 
 ---
 
 ## How it works
 
-```
-Merchant adds script tag to their site
-            ↓
-User clicks "Pay with Crypto"
-            ↓
-FluxPay.open(paymentId) → modal opens
-            ↓
-User connects wallet (Phantom, Solflare, Backpack...)
-            ↓
-User clicks Pay → Phantom signs + sends SOL
-            ↓
-Widget polls backend every 3s for status
-            ↓
-"Payment Confirmed ✅" shown automatically
-```
+
+<img width="2879" height="3338" alt="diagram-export-28-04-2026-13_02_59" src="https://github.com/user-attachments/assets/ca54c380-6b28-4f29-a6d4-03e50df59e9b" />
+[Link To FlowChart](https://app.eraser.io/workspace/z35BCDaVw5haoEzWbcEY?origin=share)
 
 No page redirects. No wallet SDK required on the merchant's side. Works on any website regardless of framework.
 
@@ -185,18 +177,11 @@ npm run build        # builds dist/fluxpay.js
 
 To test locally, serve the folder and open test.html:
 ```bash
-npx serve . -p 8080
+npx serve .
 # open http://localhost:8080/test.html
 ```
 
-Make sure your [FluxPay backend](https://github.com/Cypher-CP0/fluxpay) is running on port 3000.
-
----
-
-## Known issues
-
-- [ ] Wallet connection unreliable on first select ([#1](https://github.com/Cypher-CP0/fluxpay-widget/issues/1)) — workaround: click connect again
-- [ ] SOL price hardcoded at $165 — needs live price feed from backend
+Make sure your [FluxPay backend](https://github.com/Cypher-CP0/fluxpay) is running.
 
 ---
 
