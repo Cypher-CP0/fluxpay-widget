@@ -128,15 +128,47 @@ function WalletPayTab({
     const [showWallets, setShowWallets] = useState(false)
     const [connecting, setConnecting] = useState(false)
 
-    // When wallet is selected, automatically connect
+    // When wallet is selected, automatically connect.
+    //
+    // On the first select after the modal mounts there is a race in
+    // @solana/wallet-adapter-react: `select(walletName)` updates the
+    // `wallet` state but the WalletContext's internal `adapter` reference
+    // is not always in place by the time this effect re-runs and calls
+    // `connect()`. The hook's `connect` then throws
+    // `WalletNotSelectedError` and the popup never opens; clicking again
+    // succeeds because the second pass sees a fully-registered adapter.
+    //
+    // Retry once after a short delay on `WalletNotSelectedError` so the
+    // first click works the same as subsequent ones. Other errors
+    // (rejected, timed out, …) bubble up unchanged.
     useEffect(() => {
-        if (wallet && !connected && connecting) {
-            connect()
-                .then(() => setConnecting(false))
-                .catch((err: any) => {
-                    setError(err.message ?? 'Failed to connect')
-                    setConnecting(false)
-                })
+        if (!(wallet && !connected && connecting)) return
+        let cancelled = false
+        let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+        const tryConnect = async (retried: boolean): Promise<void> => {
+            try {
+                await connect()
+                if (!cancelled) setConnecting(false)
+            } catch (err: any) {
+                if (cancelled) return
+                if (!retried && err?.name === 'WalletNotSelectedError') {
+                    retryTimer = setTimeout(() => {
+                        retryTimer = null
+                        void tryConnect(true)
+                    }, 200)
+                    return
+                }
+                setError(err?.message ?? 'Failed to connect')
+                setConnecting(false)
+            }
+        }
+
+        void tryConnect(false)
+
+        return () => {
+            cancelled = true
+            if (retryTimer !== null) clearTimeout(retryTimer)
         }
     }, [wallet, connected, connecting])
 
