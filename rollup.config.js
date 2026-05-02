@@ -6,6 +6,7 @@ import terser from '@rollup/plugin-terser'
 import peerDepsExternal from 'rollup-plugin-peer-deps-external'
 import json from '@rollup/plugin-json'
 import postcss from 'rollup-plugin-postcss'
+import inject from '@rollup/plugin-inject'
 
 export default {
     input: 'src/index.tsx',
@@ -29,6 +30,9 @@ export default {
             preferBuiltins: false,
         }),
         commonjs(),
+        inject({
+            Buffer: ['buffer', 'Buffer'],  // polyfill Buffer globally
+        }),
         postcss({ inject: true }),
         replace({
             preventAssignment: true,

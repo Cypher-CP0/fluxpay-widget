@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { CheckoutRoot } from './CheckoutModal'
 import { FluxPayConfig } from './types'
 
-// Inject styles into document head
 function injectStyles(css: string) {
   if (document.getElementById('fluxpay-styles')) return
   const style = document.createElement('style')
@@ -13,69 +12,55 @@ function injectStyles(css: string) {
 }
 
 const STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap');
+
   .fp-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
     display: flex; align-items: center; justify-content: center;
-    z-index: 99999; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    z-index: 99999;
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    animation: fp-fade-in 0.2s ease;
   }
   .fp-modal {
-    background: #0f0f11; border: 1px solid #2a2a35; border-radius: 16px;
-    padding: 32px; width: 100%; max-width: 420px; color: #fff;
-    box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+    background: #0f0f1a;
+    border: 1px solid #1e1e35;
+    border-radius: 20px;
+    padding: 28px;
+    width: 100%; max-width: 420px;
+    color: #f0f0ff;
+    box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(124,92,252,0.1);
+    animation: fp-slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  .fp-header {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 24px;
+  .fp-loading-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 99999;
+    animation: fp-fade-in 0.15s ease;
   }
-  .fp-title { font-size: 18px; font-weight: 600; }
-  .fp-close {
-    background: none; border: none; color: #888; font-size: 22px;
-    cursor: pointer; padding: 0; line-height: 1;
+  .fp-loading-box {
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
   }
-  .fp-amount { text-align: center; margin-bottom: 24px; }
-  .fp-amount-value { font-size: 36px; font-weight: 700; color: #a78bfa; }
-  .fp-amount-label { color: #888; font-size: 14px; margin-top: 4px; }
-  .fp-tabs { display: flex; gap: 8px; margin-bottom: 24px; }
-  .fp-tab {
-    flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #2a2a35;
-    background: none; color: #888; cursor: pointer; font-size: 14px; transition: all 0.2s;
+  .fp-loading-ring {
+    width: 48px; height: 48px;
+    border: 3px solid rgba(124,92,252,0.2);
+    border-top-color: #7c5cfc;
+    border-radius: 50%;
+    animation: fp-spin 0.7s linear infinite;
   }
-  .fp-tab.active { background: #1e1b4b; border-color: #a78bfa; color: #a78bfa; }
-  .fp-qr-container { display: flex; flex-direction: column; align-items: center; gap: 16px; }
-  .fp-qr { background: #fff; padding: 12px; border-radius: 12px; }
-  .fp-address-box {
-    background: #1a1a24; border: 1px solid #2a2a35; border-radius: 8px;
-    padding: 12px; width: 100%; box-sizing: border-box;
-  }
-  .fp-address-label { font-size: 11px; color: #888; margin-bottom: 6px; }
-  .fp-address-row { display: flex; align-items: center; gap: 8px; }
-  .fp-address-text {
-    font-family: monospace; font-size: 12px; color: #ccc;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
-  }
-  .fp-copy-btn {
-    background: #2a2a35; border: none; color: #a78bfa; padding: 6px 12px;
-    border-radius: 6px; cursor: pointer; font-size: 12px; white-space: nowrap;
-  }
-  .fp-wallet-btn {
-    width: 100%; padding: 14px; background: #a78bfa; color: #fff;
-    border: none; border-radius: 10px; font-size: 16px; font-weight: 600;
-    cursor: pointer; margin-bottom: 12px; transition: background 0.2s;
-  }
-  .fp-wallet-btn:hover { background: #9061f9; }
-  .fp-wallet-btn:disabled { background: #4a4a6a; cursor: not-allowed; }
-  .fp-timer { text-align: center; color: #888; font-size: 13px; margin-top: 16px; }
-  .fp-timer span { color: #f59e0b; font-weight: 600; }
-  .fp-status { text-align: center; padding: 24px 0; }
-  .fp-status-icon { font-size: 48px; margin-bottom: 12px; }
-  .fp-status-text { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
-  .fp-status-sub { color: #888; font-size: 14px; }
-  .fp-spinner {
-    width: 40px; height: 40px; border: 3px solid #2a2a35;
-    border-top-color: #a78bfa; border-radius: 50%;
-    animation: fp-spin 0.8s linear infinite; margin: 0 auto 16px;
+  .fp-loading-text {
+    color: #8888aa; font-size: 14px;
+    font-family: 'DM Sans', sans-serif;
   }
   @keyframes fp-spin { to { transform: rotate(360deg); } }
+  @keyframes fp-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes fp-slide-up {
+    from { opacity: 0; transform: translateY(16px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
 `
 
 let globalConfig: FluxPayConfig | null = null
@@ -83,55 +68,67 @@ let rootContainer: HTMLDivElement | null = null
 let reactRoot: ReturnType<typeof createRoot> | null = null
 
 function unmount() {
-  if (reactRoot) {
-    reactRoot.unmount()
-    reactRoot = null
+  if (reactRoot) { reactRoot.unmount(); reactRoot = null }
+  if (rootContainer) { document.body.removeChild(rootContainer); rootContainer = null }
+}
+
+function showLoader() {
+  injectStyles(STYLES)
+  unmount()
+  rootContainer = document.createElement('div')
+  rootContainer.id = 'fluxpay-root'
+  document.body.appendChild(rootContainer)
+  reactRoot = createRoot(rootContainer)
+  reactRoot.render(
+    React.createElement('div', { className: 'fp-loading-overlay' },
+      React.createElement('div', { className: 'fp-loading-box' },
+        React.createElement('div', { className: 'fp-loading-ring' }),
+        React.createElement('div', { className: 'fp-loading-text' }, 'Preparing checkout...')
+      )
+    )
+  )
+}
+
+function showModal(paymentId: string, cfg: FluxPayConfig) {
+  if (!rootContainer) {
+    rootContainer = document.createElement('div')
+    rootContainer.id = 'fluxpay-root'
+    document.body.appendChild(rootContainer)
+    reactRoot = createRoot(rootContainer)
   }
-  if (rootContainer) {
-    document.body.removeChild(rootContainer)
-    rootContainer = null
-  }
+  reactRoot!.render(
+    React.createElement(CheckoutRoot, {
+      paymentId,
+      config: cfg,
+      onClose: unmount,
+    })
+  )
 }
 
 const FluxPay = {
-  // Call once with your config
   init(config: FluxPayConfig) {
     globalConfig = config
     injectStyles(STYLES)
   },
 
-  // Call with a payment_id to open the checkout modal
-  open(paymentId: string, config?: FluxPayConfig) {
+  async open(paymentId: string, config?: FluxPayConfig) {
     const cfg = config ?? globalConfig
-    if (!cfg) {
-      throw new Error('FluxPay: call FluxPay.init(config) before FluxPay.open()')
-    }
+    if (!cfg) throw new Error('FluxPay: call FluxPay.init(config) before FluxPay.open()')
 
-    injectStyles(STYLES)
-    unmount()
+    // Show loading spinner immediately
+    showLoader()
 
-    rootContainer = document.createElement('div')
-    rootContainer.id = 'fluxpay-root'
-    document.body.appendChild(rootContainer)
+    // Small delay to ensure loader renders before React mounts the full modal
+    await new Promise(res => setTimeout(res, 100))
 
-    reactRoot = createRoot(rootContainer)
-    reactRoot.render(
-      React.createElement(CheckoutRoot, {
-        paymentId,
-        config: cfg,
-        onClose: unmount,
-      })
-    )
+    showModal(paymentId, cfg)
   },
 
-  close() {
-    unmount()
-  },
+  close() { unmount() },
 }
 
 export default FluxPay
 
-// Also expose on window for script tag usage
 if (typeof window !== 'undefined') {
-  ; (window as any).FluxPay = FluxPay
+  (window as any).FluxPay = FluxPay
 }
