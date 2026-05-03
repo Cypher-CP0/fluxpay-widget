@@ -379,7 +379,7 @@ function CheckoutModal({
 }) {
     const [tab, setTab] = useState<'wallet' | 'qr'>('wallet')
     const [copied, setCopied] = useState(false)
-    const [solPrice, setSolPrice] = useState<number>(165)
+    const [solPrice, setSolPrice] = useState<number | null>(null)
     const [selectedToken, setSelectedToken] = useState<Token>('SOL')
     const { payment, error } = usePaymentStatus(paymentId, config)
     const { display: timerDisplay } = useCountdown(payment?.expires_at ?? null)
@@ -388,15 +388,23 @@ function CheckoutModal({
     const isProcessing = ['detected', 'swapping'].includes(payment?.status ?? '')
     const showActions = !isTerminal && !isProcessing
 
+    // Prefer the price the backend already attached to the payment object
+    // (no extra HTTP roundtrip, and matches the price used at payment creation).
+    // Fall back to GET /api/price/sol once for backends that don't yet return it.
     useEffect(() => {
+        if (payment?.sol_price_usd && payment.sol_price_usd > 0) {
+            setSolPrice(payment.sol_price_usd)
+            return
+        }
+        if (solPrice != null) return
         fetch(`${config.apiUrl}/api/price/sol`, { headers: { 'x-api-key': config.apiKey } })
             .then(r => r.json())
             .then(d => { if (d.sol_usd) setSolPrice(d.sol_usd) })
             .catch(() => { })
-    }, [])
+    }, [payment?.sol_price_usd])
 
     const amountUsdc = payment ? Number(payment.amount_usdc) : 0
-    const amountSol = amountUsdc / solPrice
+    const amountSol = solPrice && solPrice > 0 ? amountUsdc / solPrice : 0
 
     const copyAddress = () => {
         if (!payment?.deposit_address) return

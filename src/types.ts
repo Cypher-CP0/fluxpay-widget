@@ -16,6 +16,12 @@ export interface Payment {
     status: PaymentStatus
     expires_at: string
     created_at: string
+    /**
+     * Live SOL/USD price the backend used at the time this payment object
+     * was returned. Cached server-side (30s TTL). Optional for
+     * compatibility with older backends that don't return it.
+     */
+    sol_price_usd?: number
 }
 
 export interface FluxPayConfig {
