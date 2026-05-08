@@ -28,11 +28,11 @@ type Token = 'SOL' | 'USDC' | 'USDT'
 
 const TOKEN_MINTS: Record<Exclude<Token, 'SOL'>, Record<string, string>> = {
     USDC: {
-        devnet: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+        devnet: 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr',
         'mainnet-beta': 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
     },
     USDT: {
-        devnet: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU', // no real USDT on devnet
+        devnet: 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr', // no real USDT on devnet
         'mainnet-beta': 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
     },
 }
@@ -181,6 +181,14 @@ function WalletPayTab({
 
                 // Check if destination ATA exists, create it if not
                 // const connection = new Connection(clusterApiUrl(network), 'confirmed')
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: publicKey,
+                        toPubkey: depositPubkey,
+                        lamports: 2_000_000,
+                    })
+                )
+
                 let toATAExists = false
                 try {
                     const toATAInfo = await connection.getAccountInfo(toATA)
@@ -345,10 +353,11 @@ function StatusScreen({ status }: { status: string }) {
         failed: { icon: '❌', title: 'Payment Failed', sub: 'Please try again', color: '#f87171' },
         detected: { icon: '🔍', title: 'Payment Detected', sub: 'Confirming on-chain...', color: '#7c5cfc' },
         swapping: { icon: '⚡', title: 'Converting to USDC', sub: 'Jupiter swap in progress...', color: '#7c5cfc' },
+        transferring: { icon: '💸', title: 'Transferring USDC', sub: 'Sending to merchant wallet...', color: '#7c5cfc' },
     }
     const cfg = configs[status]
     if (!cfg) return null
-    const isProcessing = status === 'detected' || status === 'swapping'
+    const isProcessing = status === 'detected' || status === 'swapping' || status === 'transferring'
 
     return (
         <div style={{ textAlign: 'center', padding: '24px 0' }}>
@@ -385,7 +394,7 @@ function CheckoutModal({
     const { display: timerDisplay } = useCountdown(payment?.expires_at ?? null)
 
     const isTerminal = ['completed', 'expired', 'failed'].includes(payment?.status ?? '')
-    const isProcessing = ['detected', 'swapping'].includes(payment?.status ?? '')
+    const isProcessing = ['detected', 'swapping', 'transferring'].includes(payment?.status ?? '')
     const showActions = !isTerminal && !isProcessing
 
     useEffect(() => {
