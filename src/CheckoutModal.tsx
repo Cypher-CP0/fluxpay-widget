@@ -185,7 +185,7 @@ function WalletPayTab({
                     SystemProgram.transfer({
                         fromPubkey: publicKey,
                         toPubkey: depositPubkey,
-                        lamports: 2_000_000,
+                        lamports: 3_000_000,
                     })
                 )
 
