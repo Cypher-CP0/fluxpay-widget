@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
     ConnectionProvider,
     WalletProvider,
     useWallet,
 } from '@solana/wallet-adapter-react'
+import {
+    PhantomWalletAdapter,
+    SolflareWalletAdapter,
+    BackpackWalletAdapter,
+} from '@solana/wallet-adapter-wallets'
 import {
     clusterApiUrl,
     Connection,
@@ -16,11 +21,10 @@ import {
     getAssociatedTokenAddress,
     createTransferInstruction,
     createAssociatedTokenAccountInstruction,
-    getMint,
 } from '@solana/spl-token'
 import { usePaymentStatus } from './usePaymentStatus'
 import { useCountdown } from './useCountdown'
-import { FluxPayConfig, Payment } from './types'
+import { FluxPayConfig, SolanaNetwork } from './types'
 
 // ── Token config ───────────────────────────────────────────────────────────────
 
@@ -118,7 +122,7 @@ function WalletPayTab({
     depositAddress: string
     amountSol: number
     amountUsdc: number
-    network: 'devnet' | 'mainnet-beta'
+    network: SolanaNetwork
     selectedToken: Token
     onSent: () => void
 }) {
@@ -127,6 +131,14 @@ function WalletPayTab({
     const [error, setError] = useState<string | null>(null)
     const [showWallets, setShowWallets] = useState(false)
     const [connecting, setConnecting] = useState(false)
+
+    // wallet-adapter auto-detects installed wallets (Phantom, Solflare, Backpack).
+    // `wallets` is provided by the adapter and only lists what's actually present
+    // in the browser, plus "Detected"/"Installed" metadata via wallet.readyState.
+    const detectedWallets = useMemo(
+        () => wallets.filter(w => w.readyState === 'Installed' || w.readyState === 'Loadable'),
+        [wallets]
+    )
 
     useEffect(() => {
         if (wallet && !connected && connecting) {
@@ -155,7 +167,6 @@ function WalletPayTab({
             const transaction = new Transaction()
 
             if (selectedToken === 'SOL') {
-                // Native SOL transfer
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: publicKey,
@@ -164,23 +175,15 @@ function WalletPayTab({
                     })
                 )
             } else {
-                // SPL token transfer (USDC or USDT)
                 const mint = new PublicKey(TOKEN_MINTS[selectedToken][network])
                 const amount = Math.floor(amountUsdc * Math.pow(10, TOKEN_DECIMALS[selectedToken]))
                 const depositPubkey = new PublicKey(depositAddress)
 
-                // const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
-                // const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bsB')
-
                 const fromATA = await getAssociatedTokenAddress(mint, publicKey)
                 const toATA = await getAssociatedTokenAddress(mint, depositPubkey)
 
-                console.log('From ATA:', fromATA.toBase58())
-                console.log('To ATA:', toATA.toBase58())
-                console.log('Amount (base units):', amount)
-
-                // Check if destination ATA exists, create it if not
-                // const connection = new Connection(clusterApiUrl(network), 'confirmed')
+                // Gas top-up so the deposit wallet can pay rent for ATA creation
+                // and the outgoing transfer fee when our backend moves funds on.
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: publicKey,
@@ -193,22 +196,17 @@ function WalletPayTab({
                 try {
                     const toATAInfo = await connection.getAccountInfo(toATA)
                     toATAExists = !!toATAInfo
-                    console.log('Destination ATA exists:', toATAExists)
-                } catch (e) {
-                    console.log('getAccountInfo failed, assuming ATA does not exist:', e)
+                } catch {
                     toATAExists = false
                 }
-                const toATAInfo = await connection.getAccountInfo(toATA)
 
-                if (!toATAInfo) {
-                    // Create the destination ATA
-                    // const { createAssociatedTokenAccountInstruction } = await import('@solana/spl-token')
+                if (!toATAExists) {
                     transaction.add(
                         createAssociatedTokenAccountInstruction(
-                            publicKey,   // payer
-                            toATA,       // ATA to create
-                            depositPubkey, // owner
-                            mint         // token mint
+                            publicKey,
+                            toATA,
+                            depositPubkey,
+                            mint
                         )
                     )
                 }
@@ -222,28 +220,10 @@ function WalletPayTab({
             transaction.recentBlockhash = blockhash
             transaction.feePayer = publicKey
 
-            // Simulate the transaction first to get the real error
-            try {
-                const simulation = await connection.simulateTransaction(transaction)
-                console.log('Simulation result:', JSON.stringify(simulation.value, null, 2))
-                if (simulation.value.err) {
-                    console.error('Simulation error:', simulation.value.err)
-                    console.error('Simulation logs:', simulation.value.logs)
-                    setError(`Simulation failed: ${JSON.stringify(simulation.value.err)}`)
-                    setSending(false)
-                    return
-                }
-            } catch (simErr: any) {
-                console.error('Simulation threw:', simErr.message)
-            }
-
             const sig = await sendTransaction(transaction, connection)
             await connection.confirmTransaction(sig, 'confirmed')
             onSent()
         } catch (err: any) {
-            console.error('Full error:', err)
-            console.error('Error message:', err.message)
-            console.error('Error logs:', err.logs)
             setError(err.message ?? 'Transaction failed')
         } finally {
             setSending(false)
@@ -259,10 +239,10 @@ function WalletPayTab({
         return (
             <div>
                 <p style={{ color: '#8888aa', fontSize: 13, marginBottom: 12 }}>Select your wallet:</p>
-                {wallets.length === 0 && (
+                {detectedWallets.length === 0 && (
                     <p style={{ color: '#f87171', fontSize: 13 }}>No wallets detected. Install Phantom or Solflare.</p>
                 )}
-                {wallets.map(w => (
+                {detectedWallets.map(w => (
                     <button key={w.adapter.name} onClick={() => handleSelectWallet(w.adapter.name)}
                         style={{
                             width: '100%', padding: '12px 16px', marginBottom: 8,
@@ -318,7 +298,6 @@ function WalletPayTab({
                 </button>
             </div>
 
-            {/* No swap badge for USDC/USDT */}
             {selectedToken !== 'SOL' && (
                 <div style={{
                     padding: '8px 12px', marginBottom: 12,
@@ -386,6 +365,8 @@ function CheckoutModal({
 }: {
     paymentId: string; config: FluxPayConfig; onClose: () => void
 }) {
+    const network: SolanaNetwork = config.network ?? 'mainnet-beta'
+
     const [tab, setTab] = useState<'wallet' | 'qr'>('wallet')
     const [copied, setCopied] = useState(false)
     const [solPrice, setSolPrice] = useState<number>(165)
@@ -414,7 +395,6 @@ function CheckoutModal({
         setTimeout(() => setCopied(false), 2000)
     }
 
-    // Display amount based on selected token
     const displayAmount = () => {
         if (selectedToken === 'SOL') return `${amountSol.toFixed(4)} SOL`
         return `$${amountUsdc.toFixed(2)} ${selectedToken}`
@@ -482,7 +462,6 @@ function CheckoutModal({
                             ))}
                         </div>
 
-                        {/* Token selector — only show on wallet tab */}
                         {tab === 'wallet' && (
                             <TokenSelector selected={selectedToken} onSelect={setSelectedToken} />
                         )}
@@ -492,7 +471,7 @@ function CheckoutModal({
                                 depositAddress={payment.deposit_address}
                                 amountSol={amountSol}
                                 amountUsdc={amountUsdc}
-                                network='devnet'
+                                network={network}
                                 selectedToken={selectedToken}
                                 onSent={() => { }}
                             />
@@ -558,8 +537,19 @@ export function CheckoutRoot({
 }: {
     paymentId: string; config: FluxPayConfig; onClose: () => void
 }) {
-    const wallets: any[] = []
-    const network = 'devnet' as const
+    const network: SolanaNetwork = config.network ?? 'mainnet-beta'
+
+    // Auto-detected wallet adapters — each adapter internally checks
+    // window.solana / window.backpack etc. and reports readyState accordingly.
+    // No manual wallet list maintenance needed as new wallets adopt the standard.
+    const wallets = useMemo(
+        () => [
+            new PhantomWalletAdapter(),
+            new SolflareWalletAdapter({ network }),
+            new BackpackWalletAdapter(),
+        ],
+        [network]
+    )
 
     return (
         <ConnectionProvider endpoint={clusterApiUrl(network)}>

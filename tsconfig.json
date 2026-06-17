@@ -3,24 +3,23 @@
         "target": "ES2018",
         "module": "ESNext",
         "moduleResolution": "node",
-        "jsx": "react-jsx",
+        "lib": [
+            "DOM",
+            "ES2018"
+        ],
+        "jsx": "react",
+        "declaration": true,
+        "declarationDir": "dist/types",
+        "emitDeclarationOnly": false,
+        "outDir": "dist/.tsbuild",
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
-        "declaration": true,
-        "declarationDir": "dist/types",
-        "outDir": "dist"
+        "forceConsistentCasingInFileNames": true,
+        "resolveJsonModule": true,
+        "allowSyntheticDefaultImports": true
     },
     "include": [
-        "src/**/*"
-    ],
-    "exclude": [
-        "node_modules",
-        "dist"
-    ],
-    "paths": {
-        "react": [
-            "./node_modules/@types/react"
-        ]
-    }
+        "src"
+    ]
 }

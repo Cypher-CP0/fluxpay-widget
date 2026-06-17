@@ -31,17 +31,18 @@ export default {
         }),
         commonjs(),
         inject({
-            Buffer: ['buffer', 'Buffer'],  // polyfill Buffer globally
+            Buffer: ['buffer', 'Buffer'],
         }),
         postcss({ inject: true }),
         replace({
             preventAssignment: true,
             'process.env.NODE_ENV': JSON.stringify('production'),
-            'process.env.SOLANA_NETWORK': JSON.stringify('devnet'),
             'process.browser': JSON.stringify(true),
             'process.version': JSON.stringify(''),
             'typeof process': JSON.stringify('undefined'),
         }),
+        // emitDeclarationOnly is false in tsconfig, so this also writes
+        // dist/.tsbuild/*.d.ts as a side effect, consumed by rollup.dts.config.js
         typescript({ tsconfig: './tsconfig.json' }),
         terser(),
     ],
