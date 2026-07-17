@@ -7,7 +7,6 @@ import {
 import {
     PhantomWalletAdapter,
     SolflareWalletAdapter,
-    BackpackWalletAdapter,
 } from '@solana/wallet-adapter-wallets'
 import {
     clusterApiUrl,
@@ -24,7 +23,12 @@ import {
 } from '@solana/spl-token'
 import { usePaymentStatus } from './usePaymentStatus'
 import { useCountdown } from './useCountdown'
+import { buildDepositInstruction, verifyEscrowAmount } from './escrow'
 import { FluxPayConfig, SolanaNetwork } from './types'
+import { WalletAdapterNetwork } from '@solana/wallet-adapter-base'
+
+const ConnectionProviderAny = ConnectionProvider as any
+
 
 // ── Token config ───────────────────────────────────────────────────────────────
 
@@ -36,7 +40,7 @@ const TOKEN_MINTS: Record<Exclude<Token, 'SOL'>, Record<string, string>> = {
         'mainnet-beta': 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
     },
     USDT: {
-        devnet: 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr', // no real USDT on devnet
+        devnet: 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr',
         'mainnet-beta': 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
     },
 }
@@ -62,9 +66,9 @@ function QRCode({ value }: { value: string }) {
 // ── Token Selector ─────────────────────────────────────────────────────────────
 
 function TokenSelector({
-    selected, onSelect,
+    selected, onSelect, disabled,
 }: {
-    selected: Token; onSelect: (t: Token) => void
+    selected: Token | null; onSelect: (t: Token) => void; disabled?: boolean
 }) {
     const tokens: { token: Token; icon: string; label: string }[] = [
         { token: 'SOL', icon: '◎', label: 'SOL' },
@@ -82,12 +86,14 @@ function TokenSelector({
                 {tokens.map(({ token, icon, label }) => (
                     <button
                         key={token}
+                        disabled={disabled}
                         onClick={() => onSelect(token)}
                         style={{
                             flex: 1, padding: '10px 8px',
                             background: selected === token ? 'rgba(124,92,252,0.15)' : 'rgba(255,255,255,0.04)',
                             border: `1px solid ${selected === token ? 'rgba(124,92,252,0.6)' : '#1e1e35'}`,
-                            borderRadius: 10, cursor: 'pointer',
+                            borderRadius: 10, cursor: disabled ? 'not-allowed' : 'pointer',
+                            opacity: disabled ? 0.5 : 1,
                             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
                             transition: 'all 0.15s',
                         }}
@@ -117,13 +123,15 @@ function TokenSelector({
 // ── Wallet Pay Tab ─────────────────────────────────────────────────────────────
 
 function WalletPayTab({
-    depositAddress, amountSol, amountUsdc, network, selectedToken, onSent,
+    depositAddress, amountSol, amountUsdc, network, selectedToken, escrowUsed, paymentId, onSent,
 }: {
     depositAddress: string
     amountSol: number
     amountUsdc: number
     network: SolanaNetwork
     selectedToken: Token
+    escrowUsed: boolean
+    paymentId: string
     onSent: () => void
 }) {
     const { publicKey, sendTransaction, connected, select, connect, wallets, disconnect, wallet } = useWallet()
@@ -132,9 +140,6 @@ function WalletPayTab({
     const [showWallets, setShowWallets] = useState(false)
     const [connecting, setConnecting] = useState(false)
 
-    // wallet-adapter auto-detects installed wallets (Phantom, Solflare, Backpack).
-    // `wallets` is provided by the adapter and only lists what's actually present
-    // in the browser, plus "Detected"/"Installed" metadata via wallet.readyState.
     const detectedWallets = useMemo(
         () => wallets.filter(w => w.readyState === 'Installed' || w.readyState === 'Loadable'),
         [wallets]
@@ -174,7 +179,28 @@ function WalletPayTab({
                         lamports: Math.floor(amountSol * LAMPORTS_PER_SOL),
                     })
                 )
+            } else if (escrowUsed) {
+                // Escrow path: deposit into the on-chain escrow program.
+                // Independently verify the on-chain escrow amount matches what
+                // we're about to charge, BEFORE the customer signs anything.
+                const { ok, onChainAmount } = await verifyEscrowAmount(connection, paymentId, amountUsdc)
+                if (!ok) {
+                    throw new Error(
+                        `Amount mismatch: expected $${amountUsdc.toFixed(2)}, ` +
+                        `escrow shows $${onChainAmount.toFixed(2)}. Payment aborted for your safety.`
+                    )
+                }
+
+                const mint = new PublicKey(TOKEN_MINTS[selectedToken][network])
+                const depositIx = await buildDepositInstruction({
+                    connection,
+                    paymentUuid: paymentId,
+                    depositorPublicKey: publicKey,
+                    usdcMint: mint,
+                })
+                transaction.add(depositIx)
             } else {
+                // Legacy direct-transfer path.
                 const mint = new PublicKey(TOKEN_MINTS[selectedToken][network])
                 const amount = Math.floor(amountUsdc * Math.pow(10, TOKEN_DECIMALS[selectedToken]))
                 const depositPubkey = new PublicKey(depositAddress)
@@ -182,8 +208,6 @@ function WalletPayTab({
                 const fromATA = await getAssociatedTokenAddress(mint, publicKey)
                 const toATA = await getAssociatedTokenAddress(mint, depositPubkey)
 
-                // Gas top-up so the deposit wallet can pay rent for ATA creation
-                // and the outgoing transfer fee when our backend moves funds on.
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: publicKey,
@@ -202,18 +226,11 @@ function WalletPayTab({
 
                 if (!toATAExists) {
                     transaction.add(
-                        createAssociatedTokenAccountInstruction(
-                            publicKey,
-                            toATA,
-                            depositPubkey,
-                            mint
-                        )
+                        createAssociatedTokenAccountInstruction(publicKey, toATA, depositPubkey, mint)
                     )
                 }
 
-                transaction.add(
-                    createTransferInstruction(fromATA, toATA, publicKey, amount)
-                )
+                transaction.add(createTransferInstruction(fromATA, toATA, publicKey, amount))
             }
 
             const { blockhash } = await connection.getLatestBlockhash()
@@ -305,7 +322,7 @@ function WalletPayTab({
                     borderRadius: 8, fontSize: 12, color: '#22d3a5',
                     display: 'flex', alignItems: 'center', gap: 6,
                 }}>
-                    <span>✓</span> Direct payment — no swap fees
+                    <span>✓</span> {escrowUsed ? 'Secured by on-chain escrow' : 'Direct payment — no swap fees'}
                 </div>
             )}
 
@@ -370,7 +387,12 @@ function CheckoutModal({
     const [tab, setTab] = useState<'wallet' | 'qr'>('wallet')
     const [copied, setCopied] = useState(false)
     const [solPrice, setSolPrice] = useState<number>(165)
-    const [selectedToken, setSelectedToken] = useState<Token>('SOL')
+    const [selectedToken, setSelectedToken] = useState<Token | null>(null)
+    const [tokenDepositAddress, setTokenDepositAddress] = useState<string | null>(null)
+    const [tokenEscrowUsed, setTokenEscrowUsed] = useState(false)
+    const [selectingToken, setSelectingToken] = useState(false)
+    const [tokenSelectError, setTokenSelectError] = useState<string | null>(null)
+
     const { payment, error } = usePaymentStatus(paymentId, config)
     const { display: timerDisplay } = useCountdown(payment?.expires_at ?? null)
 
@@ -385,25 +407,55 @@ function CheckoutModal({
             .catch(() => { })
     }, [])
 
+    // Called when the customer picks a token in TokenSelector. Under Option B,
+    // the deposit address doesn't exist until this call resolves.
+    const handleSelectToken = async (token: Token) => {
+        if (selectedToken === token && tokenDepositAddress) return
+
+        setSelectingToken(true)
+        setTokenSelectError(null)
+        try {
+            const res = await fetch(`${config.apiUrl}/api/payments/${paymentId}/select-token`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': config.apiKey,
+                },
+                body: JSON.stringify({ token }),
+            })
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}))
+                throw new Error(body.error ?? `Failed to select token (${res.status})`)
+            }
+            const data = await res.json()
+            setSelectedToken(token)
+            setTokenDepositAddress(data.deposit_address)
+            setTokenEscrowUsed(!!data.escrow_used)
+        } catch (err: any) {
+            setTokenSelectError(err.message ?? 'Failed to select token')
+        } finally {
+            setSelectingToken(false)
+        }
+    }
+
     const amountUsdc = payment ? Number(payment.amount_usdc) : 0
     const amountSol = amountUsdc / solPrice
 
     const copyAddress = () => {
-        if (!payment?.deposit_address) return
-        navigator.clipboard.writeText(payment.deposit_address)
+        if (!tokenDepositAddress) return
+        navigator.clipboard.writeText(tokenDepositAddress)
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
     }
 
     const displayAmount = () => {
         if (selectedToken === 'SOL') return `${amountSol.toFixed(4)} SOL`
-        return `$${amountUsdc.toFixed(2)} ${selectedToken}`
+        return `$${amountUsdc.toFixed(2)} ${selectedToken ?? ''}`
     }
 
     return (
         <div className="fp-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
             <div className="fp-modal">
-                {/* Header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div style={{
@@ -421,7 +473,6 @@ function CheckoutModal({
                     }}>×</button>
                 </div>
 
-                {/* Amount */}
                 {payment && (
                     <div style={{
                         textAlign: 'center', marginBottom: 24,
@@ -431,95 +482,117 @@ function CheckoutModal({
                         <div style={{ fontSize: 38, fontWeight: 800, color: '#7c5cfc', letterSpacing: '-0.02em' }}>
                             ${amountUsdc.toFixed(2)}
                         </div>
-                        <div style={{ color: '#8888aa', fontSize: 13, marginTop: 4 }}>
-                            ≈ {displayAmount()}
-                        </div>
+                        {selectedToken && (
+                            <div style={{ color: '#8888aa', fontSize: 13, marginTop: 4 }}>
+                                ≈ {displayAmount()}
+                            </div>
+                        )}
                     </div>
                 )}
 
-                {/* Status */}
                 {(isTerminal || isProcessing) && payment && <StatusScreen status={payment.status} />}
 
-                {/* Payment actions */}
                 {showActions && payment && (
                     <>
-                        {/* Tabs */}
-                        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-                            {[
-                                { key: 'wallet', label: '🔗 Connect Wallet' },
-                                { key: 'qr', label: '📷 QR Code' },
-                            ].map(t => (
-                                <button key={t.key} onClick={() => setTab(t.key as any)}
-                                    style={{
-                                        flex: 1, padding: '10px', borderRadius: 8, fontSize: 13,
-                                        background: tab === t.key ? 'rgba(124,92,252,0.15)' : 'rgba(255,255,255,0.04)',
-                                        border: `1px solid ${tab === t.key ? 'rgba(124,92,252,0.5)' : '#1e1e35'}`,
-                                        color: tab === t.key ? '#a78bfa' : '#8888aa',
-                                        fontWeight: tab === t.key ? 600 : 400, cursor: 'pointer',
-                                        transition: 'all 0.15s',
-                                    }}
-                                >{t.label}</button>
-                            ))}
-                        </div>
+                        <TokenSelector
+                            selected={selectedToken}
+                            onSelect={handleSelectToken}
+                            disabled={selectingToken}
+                        />
 
-                        {tab === 'wallet' && (
-                            <TokenSelector selected={selectedToken} onSelect={setSelectedToken} />
+                        {selectingToken && (
+                            <p style={{ color: '#8888aa', fontSize: 13, textAlign: 'center', marginBottom: 16 }}>
+                                Setting up payment...
+                            </p>
+                        )}
+                        {tokenSelectError && (
+                            <p style={{ color: '#f87171', fontSize: 13, textAlign: 'center', marginBottom: 16 }}>
+                                {tokenSelectError}
+                            </p>
                         )}
 
-                        {tab === 'wallet' && (
-                            <WalletPayTab
-                                depositAddress={payment.deposit_address}
-                                amountSol={amountSol}
-                                amountUsdc={amountUsdc}
-                                network={network}
-                                selectedToken={selectedToken}
-                                onSent={() => { }}
-                            />
-                        )}
-
-                        {tab === 'qr' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-                                <QRCode value={payment.deposit_address} />
-                                <div style={{
-                                    background: '#0f0f1a', border: '1px solid #1e1e35',
-                                    borderRadius: 8, padding: '12px 14px', width: '100%',
-                                }}>
-                                    <div style={{ fontSize: 10, letterSpacing: '0.1em', color: '#555570', marginBottom: 6 }}>
-                                        DEPOSIT ADDRESS
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <span style={{
-                                            fontFamily: 'monospace', fontSize: 12, color: '#a78bfa',
-                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-                                        }}>{payment.deposit_address}</span>
-                                        <button onClick={copyAddress} style={{
-                                            background: 'rgba(124,92,252,0.15)', border: '1px solid rgba(124,92,252,0.3)',
-                                            color: copied ? '#22d3a5' : '#a78bfa', padding: '5px 10px',
-                                            borderRadius: 6, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap',
-                                        }}>{copied ? 'Copied!' : 'Copy'}</button>
-                                    </div>
+                        {selectedToken && tokenDepositAddress && !selectingToken && (
+                            <>
+                                <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+                                    {[
+                                        { key: 'wallet', label: '🔗 Connect Wallet' },
+                                        { key: 'qr', label: '📷 QR Code' },
+                                    ].map(t => (
+                                        <button key={t.key} onClick={() => setTab(t.key as any)}
+                                            style={{
+                                                flex: 1, padding: '10px', borderRadius: 8, fontSize: 13,
+                                                background: tab === t.key ? 'rgba(124,92,252,0.15)' : 'rgba(255,255,255,0.04)',
+                                                border: `1px solid ${tab === t.key ? 'rgba(124,92,252,0.5)' : '#1e1e35'}`,
+                                                color: tab === t.key ? '#a78bfa' : '#8888aa',
+                                                fontWeight: tab === t.key ? 600 : 400, cursor: 'pointer',
+                                                transition: 'all 0.15s',
+                                            }}
+                                        >{t.label}</button>
+                                    ))}
                                 </div>
-                                <p style={{ color: '#8888aa', fontSize: 12, textAlign: 'center', margin: 0 }}>
-                                    Send <strong style={{ color: '#f0f0ff' }}>{amountSol.toFixed(4)} SOL</strong> or{' '}
-                                    <strong style={{ color: '#f0f0ff' }}>${amountUsdc.toFixed(2)} USDC/USDT</strong>
-                                </p>
-                            </div>
-                        )}
 
-                        {/* Timer */}
-                        <div style={{
-                            textAlign: 'center', color: '#555570', fontSize: 12, marginTop: 16,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        }}>
-                            <span>⏱</span>
-                            Expires in <span style={{ color: '#f59e0b', fontWeight: 600, marginLeft: 4 }}>{timerDisplay}</span>
-                        </div>
+                                {tab === 'wallet' && (
+                                    <WalletPayTab
+                                        depositAddress={tokenDepositAddress}
+                                        amountSol={amountSol}
+                                        amountUsdc={amountUsdc}
+                                        network={network}
+                                        selectedToken={selectedToken}
+                                        escrowUsed={tokenEscrowUsed}
+                                        paymentId={paymentId}
+                                        onSent={() => { }}
+                                    />
+                                )}
+
+                                {tab === 'qr' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+                                        <QRCode value={tokenDepositAddress} />
+                                        <div style={{
+                                            background: '#0f0f1a', border: '1px solid #1e1e35',
+                                            borderRadius: 8, padding: '12px 14px', width: '100%',
+                                        }}>
+                                            <div style={{ fontSize: 10, letterSpacing: '0.1em', color: '#555570', marginBottom: 6 }}>
+                                                DEPOSIT ADDRESS
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <span style={{
+                                                    fontFamily: 'monospace', fontSize: 12, color: '#a78bfa',
+                                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+                                                }}>{tokenDepositAddress}</span>
+                                                <button onClick={copyAddress} style={{
+                                                    background: 'rgba(124,92,252,0.15)', border: '1px solid rgba(124,92,252,0.3)',
+                                                    color: copied ? '#22d3a5' : '#a78bfa', padding: '5px 10px',
+                                                    borderRadius: 6, cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap',
+                                                }}>{copied ? 'Copied!' : 'Copy'}</button>
+                                            </div>
+                                        </div>
+                                        <p style={{ color: '#8888aa', fontSize: 12, textAlign: 'center', margin: 0 }}>
+                                            Send <strong style={{ color: '#f0f0ff' }}>{displayAmount()}</strong>
+                                        </p>
+                                        {tokenEscrowUsed && (
+                                            <p style={{ color: '#f59e0b', fontSize: 11, textAlign: 'center', margin: 0 }}>
+                                                ⚠️ Escrow-secured payments require using the Connect Wallet
+                                                flow — sending directly via QR will not auto-release. Use
+                                                Connect Wallet instead for USDC/USDT.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+
+                                <div style={{
+                                    textAlign: 'center', color: '#555570', fontSize: 12, marginTop: 16,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                }}>
+                                    <span>⏱</span>
+                                    Expires in <span style={{ color: '#f59e0b', fontWeight: 600, marginLeft: 4 }}>{timerDisplay}</span>
+                                </div>
+                            </>
+                        )}
                     </>
                 )}
 
                 {error && <p style={{ color: '#f87171', fontSize: 12, textAlign: 'center', marginTop: 12 }}>{error}</p>}
 
-                {/* Footer */}
                 <div style={{ textAlign: 'center', marginTop: 20, paddingTop: 16, borderTop: '1px solid #1e1e35' }}>
                     <span style={{ fontSize: 11, color: '#555570', letterSpacing: '0.05em' }}>
                         Powered by <span style={{ color: '#7c5cfc', fontWeight: 600 }}>FluxPay</span> · Solana
@@ -539,23 +612,21 @@ export function CheckoutRoot({
 }) {
     const network: SolanaNetwork = config.network ?? 'mainnet-beta'
 
-    // Auto-detected wallet adapters — each adapter internally checks
-    // window.solana / window.backpack etc. and reports readyState accordingly.
-    // No manual wallet list maintenance needed as new wallets adopt the standard.
+    const adapterNetwork = network === 'devnet' ? WalletAdapterNetwork.Devnet : WalletAdapterNetwork.Mainnet
+
     const wallets = useMemo(
         () => [
             new PhantomWalletAdapter(),
-            new SolflareWalletAdapter({ network }),
-            new BackpackWalletAdapter(),
+            new SolflareWalletAdapter({ network: adapterNetwork }),
         ],
-        [network]
+        [adapterNetwork]
     )
 
     return (
-        <ConnectionProvider endpoint={clusterApiUrl(network)}>
+        <ConnectionProviderAny endpoint={clusterApiUrl(network)}>
             <WalletProvider wallets={wallets} autoConnect={false}>
                 <CheckoutModal paymentId={paymentId} config={config} onClose={onClose} />
             </WalletProvider>
-        </ConnectionProvider>
+        </ConnectionProviderAny>
     )
 }

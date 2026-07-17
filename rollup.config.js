@@ -15,11 +15,21 @@ export default {
             file: 'dist/fluxpay.js',
             format: 'iife',
             name: 'FluxPay',
-            globals: {},
+            globals: {
+                'react': 'React',
+                'react-dom': 'ReactDOM',
+                'react-dom/client': 'ReactDOM',
+            },
+            // Some transitive deps (WalletConnect/Reown adapters, pulled in via
+            // @solana/wallet-adapter-wallets) use dynamic import(). IIFE format
+            // can't code-split, so inline everything into the single output file
+            // instead — which is what a drop-in <script> widget needs anyway.
+            inlineDynamicImports: true,
         },
         {
             file: 'dist/fluxpay.esm.js',
             format: 'esm',
+            inlineDynamicImports: true,
         },
     ],
     plugins: [
